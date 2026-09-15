@@ -3,7 +3,7 @@ name: Build Sonorus APK
 on:
   push:
     paths:
-      - '.source/READY'
+      - '*.zip'
   workflow_dispatch:
 
 jobs:
@@ -30,11 +30,11 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Rebuild source archive
+      - name: Unpack Sonorus source
         run: |
-          cat .source/part-* > source.b64
-          base64 -d source.b64 > Sonorus-source.zip
-          unzip -q Sonorus-source.zip -d source
+          ZIP="$(find . -maxdepth 1 -type f -name '*.zip' | head -1)"
+          test -n "$ZIP"
+          unzip -q "$ZIP" -d source
           echo "PROJECT_DIR=$(find source -mindepth 1 -maxdepth 1 -type d | head -1)" >> "$GITHUB_ENV"
 
       - name: Build debug APK
