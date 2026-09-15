@@ -1,0 +1,27 @@
+name: Export APK Signer
+
+on:
+  push:
+    paths:
+      - '.github/workflows/export-apksigner.yml'
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ensure Android build tools
+        shell: bash
+        run: |
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" 'build-tools;35.0.0'
+          test -f "$SDK/build-tools/35.0.0/lib/apksigner.jar"
+          cp "$SDK/build-tools/35.0.0/lib/apksigner.jar" apksigner.jar
+
+      - name: Upload APK signer
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apksigner-35
+          path: apksigner.jar
+          if-no-files-found: error
