@@ -1,0 +1,19 @@
+name: Trigger Sonorus v0.3.11.15 Build
+
+on:
+  push:
+    paths:
+      - '.build-v15/START'
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch v0.3.11.15 build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run build-v15.yml --repo "${{ github.repository }}" --ref main
