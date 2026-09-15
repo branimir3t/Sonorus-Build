@@ -1,0 +1,190 @@
+name: Build Sonorus v0.3.11.15
+
+on:
+  push:
+    paths:
+      - '.github/workflows/build-v15.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK 35
+        shell: bash
+        run: |
+          export ANDROID_HOME="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          export PATH="$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$PATH"
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0' 'platform-tools'
+
+      - name: Set up Gradle 8.9
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Unpack v0.3.11.14 source
+        shell: bash
+        run: |
+          rm -rf source
+          mkdir source
+          unzip -q Sonorus-Music-Android-v0.3.11.14-MobilePolish3-SIGNED-READY-Source.zip -d source
+          PROJECT_DIR="$(find source -mindepth 1 -maxdepth 1 -type d | head -1)"
+          test -n "$PROJECT_DIR"
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Apply v0.3.11.15 mobile player polish
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import os
+          root = Path(os.environ['PROJECT_DIR'])
+
+          def replace(path, old, new, count=None):
+              p = root / path
+              s = p.read_text()
+              if old not in s:
+                  raise SystemExit(f'Expected block not found in {path}')
+              s = s.replace(old, new) if count is None else s.replace(old, new, count)
+              p.write_text(s)
+
+          # Version
+          replace('app/build.gradle', 'versionCode 36', 'versionCode 37')
+          replace('app/build.gradle', "versionName '0.3.11.14-mobile-polish3'", "versionName '0.3.11.15-mobile-player-polish'")
+
+          # Pure helper for visible-catalog navigation and menu title.
+          helper = root / 'app/src/main/java/com/brane/sonora/CatalogPlaybackSupport.java'
+          helper.write_text('''package com.brane.sonora;\n\nimport java.util.List;\n\n/** Small, Android-free helpers for catalog-scoped transport and compact labels. */\npublic final class CatalogPlaybackSupport {\n    private CatalogPlaybackSupport() {}\n\n    public static long step(List<Long> visibleTrackIds, long currentTrackId, int direction) {\n        if (visibleTrackIds == null || visibleTrackIds.isEmpty() || direction == 0) return -1L;\n        int current = visibleTrackIds.indexOf(currentTrackId);\n        if (current < 0) return -1L;\n        int next = current + (direction < 0 ? -1 : 1);\n        if (next < 0 || next >= visibleTrackIds.size()) return -1L;\n        Long id = visibleTrackIds.get(next);\n        return id == null ? -1L : id;\n    }\n\n    public static String menuTitle(String artist, String title) {\n        String a = artist == null ? "" : artist.trim();\n        String t = title == null ? "" : title.trim();\n        if (!a.isEmpty() && !t.isEmpty()) return a + " - " + t;\n        if (!t.isEmpty()) return t;\n        if (!a.isEmpty()) return a;\n        return "Nepoznata pjesma";\n    }\n}\n''')
+
+          p = root / 'app/src/main/java/com/brane/sonora/MainActivity.java'
+          s = p.read_text()
+          reps = [
+            ('    private View playerBar;\n', '    private View playerBar, mobileQueueTransportBar;\n'),
+            ('        mobileQueueSearchRow = findViewById(R.id.mobileQueueSearchRow);\n', '        mobileQueueSearchRow = findViewById(R.id.mobileQueueSearchRow);\n        mobileQueueTransportBar = findViewById(R.id.mobileQueueTransportBar);\n'),
+            ('''        mobileBottomPlayButton.setOnClickListener(v -> {\n            if (engine == null) return;\n            if (engine.isPlaying()) engine.pause();\n            else if (preparePlayback()) engine.togglePlayPause();\n        });\n        mobileBottomPrevButton.setOnClickListener(v -> { if (engine != null && preparePlayback()) engine.previous(); });\n        mobileBottomNextButton.setOnClickListener(v -> { if (engine != null && preparePlayback()) engine.next(); });\n''', '''        mobileBottomPlayButton.setOnClickListener(v -> {\n            if (activeCatalogPreviewTrackId >= 0L && playbackService != null) {\n                playbackService.stopCatalogPreview();\n                return;\n            }\n            if (engine == null) return;\n            if (engine.isPlaying()) engine.pause();\n            else if (preparePlayback()) engine.togglePlayPause();\n        });\n        mobileBottomPrevButton.setOnClickListener(v -> {\n            if (activeCatalogPreviewTrackId >= 0L) navigateCatalogPreview(-1);\n            else if (engine != null && preparePlayback()) engine.previous();\n        });\n        mobileBottomNextButton.setOnClickListener(v -> {\n            if (activeCatalogPreviewTrackId >= 0L) navigateCatalogPreview(1);\n            else if (engine != null && preparePlayback()) engine.next();\n        });\n'''),
+            ('''        mobileQueuePrevButton.setOnClickListener(v -> { if (engine != null && preparePlayback()) engine.previous(); });\n        mobileQueuePlayButton.setOnClickListener(v -> {\n            if (engine == null) return;\n            if (engine.isPlaying()) engine.pause();\n            else if (preparePlayback()) engine.togglePlayPause();\n        });\n        mobileQueueStopButton.setOnClickListener(v -> {\n            if (engine == null) return;\n            engine.pause();\n            engine.seekTo(0L);\n            onProgress(0L, engine.getDuration());\n        });\n        mobileQueueNextButton.setOnClickListener(v -> { if (engine != null && preparePlayback()) engine.next(); });\n''', '''        mobileQueuePrevButton.setOnClickListener(v -> {\n            if (activeCatalogPreviewTrackId >= 0L) navigateCatalogPreview(-1);\n            else if (engine != null && preparePlayback()) engine.previous();\n        });\n        mobileQueuePlayButton.setOnClickListener(v -> {\n            if (activeCatalogPreviewTrackId >= 0L && playbackService != null) {\n                playbackService.stopCatalogPreview();\n                return;\n            }\n            if (engine == null) return;\n            if (engine.isPlaying()) engine.pause();\n            else if (preparePlayback()) engine.togglePlayPause();\n        });\n        mobileQueueStopButton.setOnClickListener(v -> {\n            if (activeCatalogPreviewTrackId >= 0L && playbackService != null) {\n                playbackService.stopCatalogPreview();\n                return;\n            }\n            if (engine == null) return;\n            engine.pause();\n            engine.seekTo(0L);\n            onProgress(0L, engine.getDuration());\n        });\n        mobileQueueNextButton.setOnClickListener(v -> {\n            if (activeCatalogPreviewTrackId >= 0L) navigateCatalogPreview(1);\n            else if (engine != null && preparePlayback()) engine.next();\n        });\n'''),
+            ('''        mobileFullscreenPrevButton.setOnClickListener(v -> {\n            if (activeCatalogPreviewTrackId >= 0L || engine == null) return;\n            if (preparePlayback()) engine.previous();\n        });\n        mobileFullscreenNextButton.setOnClickListener(v -> {\n            if (activeCatalogPreviewTrackId >= 0L || engine == null) return;\n            if (preparePlayback()) engine.next();\n        });\n        mobileFullscreenPlayButton.setOnClickListener(v -> {\n            if (activeCatalogPreviewTrackId >= 0L || engine == null) return;\n            if (engine.isPlaying()) engine.pause();\n            else if (preparePlayback()) engine.togglePlayPause();\n            refreshFullscreenNowPlaying();\n        });\n''', '''        mobileFullscreenPrevButton.setOnClickListener(v -> {\n            if (activeCatalogPreviewTrackId >= 0L) navigateCatalogPreview(-1);\n            else if (engine != null && preparePlayback()) engine.previous();\n        });\n        mobileFullscreenNextButton.setOnClickListener(v -> {\n            if (activeCatalogPreviewTrackId >= 0L) navigateCatalogPreview(1);\n            else if (engine != null && preparePlayback()) engine.next();\n        });\n        mobileFullscreenPlayButton.setOnClickListener(v -> {\n            if (activeCatalogPreviewTrackId >= 0L && playbackService != null) {\n                playbackService.stopCatalogPreview();\n                hideFullscreenNowPlaying();\n                return;\n            }\n            if (engine == null) return;\n            if (engine.isPlaying()) engine.pause();\n            else if (preparePlayback()) engine.togglePlayPause();\n            refreshFullscreenNowPlaying();\n        });\n'''),
+            ('''        if (mobileFullscreenPrevButton != null) mobileFullscreenPrevButton.setVisibility(preview ? View.INVISIBLE : View.VISIBLE);\n        if (mobileFullscreenNextButton != null) mobileFullscreenNextButton.setVisibility(preview ? View.INVISIBLE : View.VISIBLE);\n        if (mobileFullscreenPlayButton != null) {\n            mobileFullscreenPlayButton.setVisibility(preview ? View.INVISIBLE : View.VISIBLE);\n            if (!preview && engine != null) mobileFullscreenPlayButton.setText(engine.isPlaying() ? "❚❚" : "▶");\n        }\n''', '''        if (mobileFullscreenPrevButton != null) mobileFullscreenPrevButton.setVisibility(View.VISIBLE);\n        if (mobileFullscreenNextButton != null) mobileFullscreenNextButton.setVisibility(View.VISIBLE);\n        if (mobileFullscreenPlayButton != null) {\n            mobileFullscreenPlayButton.setVisibility(View.VISIBLE);\n            if (preview) mobileFullscreenPlayButton.setText("■");\n            else if (engine != null) mobileFullscreenPlayButton.setText(engine.isPlaying() ? "❚❚" : "▶");\n        }\n'''),
+            ('        TextView title = premiumDialogTitle(track.title);\n', '        TextView title = premiumDialogTitle(CatalogPlaybackSupport.menuTitle(track.artist, track.title));\n'),
+            ('''            if (active) {\n                playButton.setText("■");\n                Track track = libraryById.get(trackId);\n                if (track != null) showCatalogPreviewNowPlaying(track);\n                updateMobileMiniPlayerVisibility();\n            } else {\n                refreshPlayerViews();\n            }\n            refreshFullscreenNowPlaying();\n''', '''            if (active) {\n                playButton.setText("■");\n                if (mobileBottomPlayButton != null) mobileBottomPlayButton.setText("■");\n                if (mobileQueuePlayButton != null) mobileQueuePlayButton.setText("■");\n                if (mobileFullscreenPlayButton != null) mobileFullscreenPlayButton.setText("■");\n                Track track = libraryById.get(trackId);\n                if (track != null) showCatalogPreviewNowPlaying(track);\n                updateMobileMiniPlayerVisibility();\n                updateMobileQueueTransportVisibility();\n            } else {\n                refreshPlayerViews();\n            }\n            refreshFullscreenNowPlaying();\n'''),
+            ('''        if (!userSeeking) {\n            progressBar.setProgress(progress);\n            if (heroProgressBar != null) heroProgressBar.setProgress(progress);\n        }\n''', '''        if (!userSeeking) {\n            progressBar.setProgress(progress);\n            if (heroProgressBar != null) heroProgressBar.setProgress(progress);\n            if (mobileQueueProgress != null) mobileQueueProgress.setProgress(progress);\n        }\n'''),
+            ('''        if (heroCurrentTime != null) heroCurrentTime.setText(position);\n        if (heroTotalTime != null) heroTotalTime.setText(duration);\n        updateFullscreenProgress(safePosition, safeDuration);\n''', '''        if (heroCurrentTime != null) heroCurrentTime.setText(position);\n        if (heroTotalTime != null) heroTotalTime.setText(duration);\n        if (mobileQueueCurrentTime != null) mobileQueueCurrentTime.setText(position);\n        if (mobileQueueTotalTime != null) mobileQueueTotalTime.setText(duration);\n        updateFullscreenProgress(safePosition, safeDuration);\n'''),
+            ('''        updateMobileMiniPlayerVisibility();\n        updateQueueMeta(engine == null ? 0L : engine.getPosition(), playing);\n''', '''        updateMobileMiniPlayerVisibility();\n        updateMobileQueueTransportVisibility();\n        updateQueueMeta(engine == null ? 0L : engine.getPosition(), playing);\n'''),
+            ('''        updateMobileMiniPlayerVisibility();\n    }\n\n    private void updateHeroTechnicalInfo''', '''        updateMobileMiniPlayerVisibility();\n        updateMobileQueueTransportVisibility();\n    }\n\n    private void updateHeroTechnicalInfo''')
+          ]
+          for old, new in reps:
+              if old not in s:
+                  raise SystemExit('MainActivity expected block missing')
+              s = s.replace(old, new, 1)
+
+          marker = '    private void updateMobileMiniPlayerVisibility() {\n'
+          insert = '''    private ArrayList<Long> visibleCatalogTrackIds() {\n        ArrayList<Long> ids = new ArrayList<>();\n        if (catalogAdapter == null) return ids;\n        for (CatalogEntry entry : catalogAdapter.getEntriesSnapshot()) {\n            if (entry != null && entry.kind == CatalogEntry.Kind.TRACK && entry.track != null) ids.add(entry.track.id);\n        }\n        return ids;\n    }\n\n    private void navigateCatalogPreview(int direction) {\n        if (playbackService == null || activeCatalogPreviewTrackId < 0L) return;\n        long targetId = CatalogPlaybackSupport.step(visibleCatalogTrackIds(), activeCatalogPreviewTrackId, direction);\n        if (targetId < 0L) return;\n        Track target = libraryById.get(targetId);\n        if (target != null) playbackService.startCatalogPreview(target);\n    }\n\n    private void updateMobileQueueTransportVisibility() {\n        if (mobileQueueTransportBar == null) return;\n        boolean hasTarget = activeCatalogPreviewTrackId >= 0L || (engine != null && engine.getCurrentTrack() != null);\n        mobileQueueTransportBar.setVisibility(hasTarget ? View.VISIBLE : View.GONE);\n    }\n\n'''
+          if marker not in s:
+              raise SystemExit('MainActivity insert marker missing')
+          s = s.replace(marker, insert + marker, 1)
+          p.write_text(s)
+
+          # Mobile PLAYER layout: list first, transport at bottom, compact modes.
+          p = root / 'app/src/main/res/layout/activity_main.xml'
+          s = p.read_text()
+          start = s.index('        <LinearLayout\n            android:id="@+id/mobileQueueTransportBar"')
+          pos = start; depth = 0; end = None
+          while pos < len(s):
+              op = s.find('<LinearLayout', pos); cl = s.find('</LinearLayout>', pos)
+              if cl < 0: break
+              if op >= 0 and op < cl:
+                  depth += 1; pos = op + 13
+              else:
+                  depth -= 1; pos = cl + 15
+                  if depth == 0:
+                      end = pos; break
+          if end is None: raise SystemExit('transport block parse failed')
+          block = s[start:end]
+          s = s[:start] + s[end:]
+          block = block.replace('android:layout_height="62dp"','android:layout_height="72dp"')
+          block = block.replace('android:background="?attr/sonorusPanel"','android:background="@drawable/bg_mobile_queue_transport"')
+          block = block.replace('android:paddingStart="10dp"','android:paddingStart="12dp"')
+          block = block.replace('android:paddingEnd="10dp"','android:paddingEnd="12dp"')
+          block = block.replace('android:paddingTop="3dp"','android:paddingTop="5dp"')
+          block = block.replace('android:paddingBottom="3dp"','android:paddingBottom="5dp"')
+          block = block.replace('android:orientation="vertical"','android:orientation="vertical"\n            android:layout_marginStart="12dp"\n            android:layout_marginEnd="12dp"\n            android:layout_marginTop="6dp"\n            android:layout_marginBottom="3dp"\n            android:visibility="gone"',1)
+          inner = block.index('            <LinearLayout', block.index('android:visibility="gone"'))
+          children=[]; pos=inner
+          for _ in range(2):
+              st=block.index('            <LinearLayout',pos); scan=st; dep=0
+              while scan < len(block):
+                  op=block.find('<LinearLayout',scan); cl=block.find('</LinearLayout>',scan)
+                  if op>=0 and op<cl: dep+=1; scan=op+13
+                  else:
+                      dep-=1; scan=cl+15
+                      if dep==0: children.append(block[st:scan]); pos=scan; break
+          controls=next(c for c in children if 'mobileQueuePrevButton' in c)
+          timeline=next(c for c in children if 'mobileQueueProgress' in c)
+          controls=controls.replace('android:layout_height="30dp"','android:layout_height="36dp"',1)
+          controls=controls.replace('style="@style/PlayerSmallButton" android:layout_width="46dp" android:layout_height="30dp"', 'style="@style/PlayerSmallButton" android:layout_width="44dp" android:layout_height="34dp" android:background="@drawable/bg_chip"')
+          controls=controls.replace('style="@style/PlayerSmallButton" android:layout_width="52dp" android:layout_height="30dp"', 'android:layout_width="48dp" android:layout_height="36dp" android:background="@drawable/bg_accent" android:minWidth="0dp" android:minHeight="0dp" android:padding="0dp" android:textColor="?attr/sonorusTextPrimary"')
+          fst=min(block.index(children[0]),block.index(children[1])); last=max(block.index(children[0])+len(children[0]),block.index(children[1])+len(children[1]))
+          block=block[:fst]+timeline+'\n\n'+controls+block[last:]
+          list_start=s.index('        <ListView\n            android:id="@+id/mobileQueueList"')
+          list_end=s.index('/>',list_start)+2
+          s=s[:list_end]+'\n\n'+block+s[list_end:]
+          old_modes='''<LinearLayout android:layout_width="match_parent" android:layout_height="46dp" android:layout_marginStart="7dp" android:layout_marginTop="4dp" android:layout_marginEnd="7dp" android:layout_marginBottom="5dp" android:gravity="center" android:orientation="horizontal" android:paddingStart="2dp" android:paddingEnd="2dp">\n            <Button android:id="@+id/mobileRepeatListModeButton" style="@style/QueueModeButton" android:layout_width="0dp" android:layout_weight="1" android:text="REPEAT LIST" />\n            <Button android:id="@+id/mobileRandomModeButton" style="@style/QueueModeButton" android:layout_width="0dp" android:layout_weight="1" android:text="RANDOM" />\n            <Button android:id="@+id/mobileRepeatOneModeButton" style="@style/QueueModeButton" android:layout_width="0dp" android:layout_weight="1" android:text="REPEAT 1" />\n        </LinearLayout>'''
+          new_modes='''<LinearLayout android:layout_width="match_parent" android:layout_height="36dp" android:layout_marginStart="12dp" android:layout_marginTop="2dp" android:layout_marginEnd="12dp" android:layout_marginBottom="3dp" android:gravity="center" android:orientation="horizontal" android:paddingStart="0dp" android:paddingEnd="0dp">\n            <Button android:id="@+id/mobileRepeatListModeButton" style="@style/MobileQueueModeButton" android:layout_width="0dp" android:layout_weight="1" android:text="REPEAT LIST" />\n            <Button android:id="@+id/mobileRandomModeButton" style="@style/MobileQueueModeButton" android:layout_width="0dp" android:layout_weight="1" android:text="RANDOM" />\n            <Button android:id="@+id/mobileRepeatOneModeButton" style="@style/MobileQueueModeButton" android:layout_width="0dp" android:layout_weight="1" android:text="REPEAT 1" />\n        </LinearLayout>'''
+          if old_modes not in s: raise SystemExit('mobile mode block missing')
+          s=s.replace(old_modes,new_modes,1)
+          s=s.replace('android:id="@+id/mobileQueueMetaBar"\n            android:layout_width="match_parent"\n            android:layout_height="36dp"','android:id="@+id/mobileQueueMetaBar"\n            android:layout_width="match_parent"\n            android:layout_height="30dp"',1)
+          p.write_text(s)
+
+          # Compact mode style and modern transport background.
+          p = root / 'app/src/main/res/values/styles.xml'
+          s = p.read_text()
+          style='''\n    <style name="MobileQueueModeButton" parent="android:style/Widget.Material.Button.Borderless">\n        <item name="android:layout_height">29dp</item>\n        <item name="android:layout_marginStart">2dp</item>\n        <item name="android:layout_marginEnd">2dp</item>\n        <item name="android:background">@drawable/bg_mode_idle</item>\n        <item name="android:minWidth">0dp</item>\n        <item name="android:minHeight">0dp</item>\n        <item name="android:paddingStart">3dp</item>\n        <item name="android:paddingEnd">3dp</item>\n        <item name="android:gravity">center</item>\n        <item name="android:maxLines">1</item>\n        <item name="android:ellipsize">end</item>\n        <item name="android:autoSizeTextType">uniform</item>\n        <item name="android:autoSizeMinTextSize">6sp</item>\n        <item name="android:autoSizeMaxTextSize">8sp</item>\n        <item name="android:autoSizeStepGranularity">1sp</item>\n        <item name="android:textAllCaps">false</item>\n        <item name="android:textColor">?attr/sonorusTextSecondary</item>\n    </style>\n'''
+          s=s.replace('</resources>',style+'</resources>',1)
+          p.write_text(s)
+
+          (root/'app/src/main/res/drawable/bg_mobile_queue_transport.xml').write_text('''<?xml version="1.0" encoding="utf-8"?>\n<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">\n    <solid android:color="#D91A1C22" />\n    <stroke android:width="1dp" android:color="#334F4F57" />\n    <corners android:radius="18dp" />\n</shape>\n''')
+          PY
+
+      - name: Verify protected tablet files unchanged
+        shell: bash
+        run: |
+          cd "$PROJECT_DIR"
+          echo '6bdb86911ad0320ba24c2d995901c73ecc05058b86256920342def67368c017b  app/src/main/res/drawable-nodpi/sonorus_turntable_scene.jpg' | sha256sum -c -
+          echo '5ea210cdaf4730275499f574b39949e0a42f0642f67dd2ece9f2ff02980de49e  app/src/main/java/com/brane/sonora/PhotographicVinylScene.java' | sha256sum -c -
+          echo 'fc3828a3d87dde6373ce6249e75c1d5243147651919b03dde88d4ee09bf7428a  app/src/main/java/com/brane/sonora/VinylSceneGeometry.java' | sha256sum -c -
+          echo '4db96948826dec19881fb3f009a7b6d05e56ca47540ceb9a71a49a7eacd4f562  app/src/main/java/com/brane/sonora/TonearmView.java' | sha256sum -c -
+          echo 'b40fe6a3e0209e456c0d5f53d034e0fd4d5f96b642eee4efa2a85bc01752f83b  app/src/main/java/com/brane/sonora/VinylRecordView.java' | sha256sum -c -
+          echo '72b9137b7087f3602ee209998a3a9f322a74c9ce1ff47a9b70ffd4e8df6ee66d  app/src/main/java/com/brane/sonora/TurntableView.java' | sha256sum -c -
+
+      - name: Build debug APK
+        run: gradle -p "$PROJECT_DIR" :app:assembleDebug --stacktrace
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          cp "$PROJECT_DIR/app/build/outputs/apk/debug/app-debug.apk" Sonorus-v0.3.11.15-debug.apk
+          (cd source && zip -qr ../Sonorus-Music-Android-v0.3.11.15-MobilePlayerPolish-SIGNED-READY-Source.zip "$(basename "$PROJECT_DIR")")
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sonorus-v0.3.11.15-debug-apk
+          path: Sonorus-v0.3.11.15-debug.apk
+          if-no-files-found: error
+
+      - name: Upload source
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sonorus-v0.3.11.15-source
+          path: Sonorus-Music-Android-v0.3.11.15-MobilePlayerPolish-SIGNED-READY-Source.zip
+          if-no-files-found: error
